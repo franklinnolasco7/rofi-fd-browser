@@ -26,7 +26,8 @@ if [[ -z "${FD_FULL_REFRESH_TTL:-}" ]]; then
     fi
 fi
 
-FD_THREADS=$(( $(nproc) * 2 ))
+NPROC_COUNT=$(nproc 2>/dev/null || echo 1)
+FD_THREADS=$(( NPROC_COUNT * 2 ))
 
 FD_EXCLUDES_HOME=(
     '.git'
@@ -109,12 +110,10 @@ fd_search() {
 collect_changed_dirs() {
     [[ ! -f "$FD_CACHE_STAMP" ]] && return
 
-    local stamp_time
-    stamp_time=$(stat -c %Y "$FD_CACHE_STAMP" 2>/dev/null || echo 0)
+    local stamp_time=$(stat -c %Y "$FD_CACHE_STAMP" 2>/dev/null || echo 0)
     (( stamp_time == 0 )) && return
 
-    local now
-    now=$(date +%s)
+    local now=$(date +%s)
     local window=$(( now - stamp_time ))
     (( window < 1 )) && window=1
 
@@ -141,12 +140,9 @@ collect_changed_dirs() {
 
     "${fd_args[@]}" 2>/dev/null | \
         while IFS= read -r file_path; do
-            [[ -z "$file_path" ]] && continue
-            local dir_path="${file_path%/*}"
-            [[ -z "$dir_path" ]] && dir_path="$SEARCH_ROOT"
-            [[ -d "$dir_path" ]] && printf '%s\0' "${dir_path%/}"
+            [[ -n "$file_path" ]] && printf '%s\0' "${file_path%/*}"
         done | \
-        sort -zu | tr '\0' '\n'
+        sort -zu | xargs -0 -n1 2>/dev/null
 }
 
 _prune_cache_entries() {
@@ -202,7 +198,7 @@ _refresh_fd_cache_body() {
 
     if fd_search "$SEARCH_ROOT" 2>/dev/null | sort -u > "$tmp_file"; then
         mv "$tmp_file" "$FD_CACHE_FILE"
-        touch "$FD_CACHE_STAMP"
+        touch "$FD_CACHE_STAMP" "$FD_FULL_STAMP"
     else
         rm -f "$tmp_file"
     fi
@@ -269,7 +265,7 @@ _update_cache_for_dirs() {
         dirs+=("${dir%/}")
     done
 
-    (( ${#dirs[@]} == 0 )) && return
+    [[ ${#dirs[@]} -eq 0 ]] && return
 
     _prune_cache_entries "${dirs[@]}"
 
@@ -332,23 +328,16 @@ cache_age_seconds() {
     local target="$1"
     [[ ! -f "$target" ]] && { printf '%d\n' -1; return; }
 
-    local mtime
-    mtime=$(stat -c %Y "$target" 2>/dev/null || echo 0)
-
+    local mtime=$(stat -c %Y "$target" 2>/dev/null || echo 0)
     (( mtime == 0 )) && { printf '%d\n' 0; return; }
 
-    local now
-    now=$(date +%s)
-    printf '%d\n' $(( now - mtime ))
+    printf '%d\n' $(( $(date +%s) - mtime ))
 }
 
 maybe_refresh_fd_cache() {
     local force_refresh=${1:-false}
-    local has_cache=false
 
-    [[ -s "$FD_CACHE_FILE" ]] && has_cache=true
-
-    if [[ "$force_refresh" == true || "$has_cache" == false ]]; then
+    if [[ "$force_refresh" == true || ! -s "$FD_CACHE_FILE" ]]; then
         refresh_fd_cache_async full false
         return 0
     fi
@@ -384,11 +373,8 @@ maybe_refresh_fd_cache() {
 
 update_history() {
     local file="$1"
-    local now
-    now=$(date +%s)
-
-    local tmp_scores
-    tmp_scores=$(mktemp)
+    local now=$(date +%s)
+    local tmp_file=$(mktemp)
     local found=0
 
     if [[ -s "$HISTORY_FILE" ]]; then
@@ -404,38 +390,25 @@ update_history() {
             (( age < 1 )) && age=1
             local score=$(( (count * 1000000) / age ))
             printf '%012d|%s|%d|%d\n' "$score" "$path" "$count" "$last_time"
-        done < "$HISTORY_FILE" > "$tmp_scores"
+        done < "$HISTORY_FILE" | sort -t'|' -k1,1nr | head -n "$HISTORY_LIMIT" | cut -d'|' -f2- > "$tmp_file"
     else
-        > "$tmp_scores"
+        : > "$tmp_file"
     fi
 
     if (( !found )); then
-        local score_new=$(( (1 * 1000000) ))
-        printf '%012d|%s|1|%d\n' "$score_new" "$file" "$now" >> "$tmp_scores"
+        {
+            printf '%s|1|%d\n' "$file" "$now"
+            cat "$tmp_file"
+        } | head -n "$HISTORY_LIMIT" > "${tmp_file}.new"
+        mv "${tmp_file}.new" "$tmp_file"
     fi
 
-    local tmp_final
-    tmp_final=$(mktemp)
-    sort -t'|' -k1,1nr "$tmp_scores" | head -n "$HISTORY_LIMIT" | cut -d'|' -f2- > "$tmp_final"
-    mv "$tmp_final" "$HISTORY_FILE"
-    rm -f "$tmp_scores"
+    mv "$tmp_file" "$HISTORY_FILE"
 }
 
 get_history_files() {
-    local now
-    now=$(date +%s)
+    local now=$(date +%s)
     [[ ! -s "$HISTORY_FILE" ]] && return
-
-    local tmp_sorted
-    tmp_sorted=$(mktemp)
-
-    while IFS='|' read -r path count last_time; do
-        [[ -z "$path" ]] && continue
-        local age=$(( (now - last_time) / 86400 + 1 ))
-        (( age < 1 )) && age=1
-        local score=$(( (count * 1000000) / age ))
-        printf '%012d|%s\n' "$score" "$path"
-    done < "$HISTORY_FILE" | sort -t'|' -k1,1nr > "$tmp_sorted"
 
     while IFS='|' read -r _ path; do
         [[ -z "$path" ]] && continue
@@ -447,9 +420,15 @@ get_history_files() {
                 printf '%s\n' "$display_path"
             fi
         fi
-    done < "$tmp_sorted"
-
-    rm -f "$tmp_sorted"
+    done < <(
+        while IFS='|' read -r path count last_time; do
+            [[ -z "$path" ]] && continue
+            local age=$(( (now - last_time) / 86400 + 1 ))
+            (( age < 1 )) && age=1
+            local score=$(( (count * 1000000) / age ))
+            printf '%012d|%s\n' "$score" "$path"
+        done < "$HISTORY_FILE" | sort -t'|' -k1,1nr
+    )
 }
 
 open_with_preferred_app() {
@@ -462,12 +441,11 @@ open_with_preferred_app() {
 
     local mimetype=""
     if command -v file >/dev/null 2>&1; then
-        mimetype=$(file --mime-type -b "$file" 2>/dev/null || printf '')
+        mimetype=$(file --mime-type -b "$file" 2>/dev/null)
     fi
 
     if [[ -n "$mimetype" ]] && command -v xdg-mime >/dev/null 2>&1; then
-        local desktop_id=""
-        desktop_id=$(xdg-mime query default "$mimetype" 2>/dev/null || printf '')
+        local desktop_id=$(xdg-mime query default "$mimetype" 2>/dev/null)
 
         if [[ -n "$desktop_id" ]]; then
             local desktop_name="${desktop_id%.desktop}"
@@ -505,8 +483,6 @@ open_with_preferred_app() {
 
 show_rofi() {
     {
-        declare -A seen=()
-
         if [[ "$SHOW_HISTORY_ICON" == true ]]; then
             printf 'Force Refresh Cache\x00icon\x1f%s\n' "$REFRESH_ICON"
         else
@@ -520,7 +496,7 @@ show_rofi() {
         if [[ -s "$FD_CACHE_FILE" ]]; then
             cat "$FD_CACHE_FILE"
         fi
-    } | awk '!seen[$0]++' | rofi -dmenu -i -p "$PROMPT_LABEL" -theme "$ROFI_THEME_PATH" -show-icons
+    } | rofi -dmenu -i -p "$PROMPT_LABEL" -theme "$ROFI_THEME_PATH" -show-icons
 }
 
 if [[ -z "${ROFI_RETV:-}" ]]; then
