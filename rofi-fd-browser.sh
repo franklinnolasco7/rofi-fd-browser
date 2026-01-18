@@ -56,7 +56,8 @@ FD_EXCLUDES_SYSTEM=(
     '.snapshots'
 )
 
-REFRESH_ICON="view-refresh"
+REFRESH_ICON="view-refresh-symbolic"
+HISTORY_ICON="document-open-recent-symbolic"
 
 mkdir -p "$FD_CACHE_DIR"
 [[ ! -f "$HISTORY_FILE" ]] && touch "$HISTORY_FILE"
@@ -471,7 +472,7 @@ get_history_files() {
 
             printf "%012d|%s\n", score, path;
         }
-    ' "$HISTORY_FILE" | sort -t'|' -k1,1nr | head -n "$HISTORY_LIMIT" | awk -F'|' -v max_display="$max_display" -v home="$HOME" '
+    ' "$HISTORY_FILE" | sort -t'|' -k1,1nr | head -n "$HISTORY_LIMIT" | awk -F'|' -v max_display="$max_display" -v home="$HOME" -v history_icon="$HISTORY_ICON" '
         function shorten_middle(text, max_len,   keep, front, back) {
             if (max_len <= 0 || length(text) <= max_len) return text;
             keep = max_len - 3;
@@ -512,7 +513,7 @@ get_history_files() {
         {
             path = $2;
             display = format_display(path);
-            printf "%s\x00display\x1f%s\n", path, display;
+            printf "%s\x00icon\x1f%s\x1fdisplay\x1f%s\n", path, history_icon, display;
         }
     '
 }
