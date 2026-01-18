@@ -56,8 +56,6 @@ FD_EXCLUDES_SYSTEM=(
     '.snapshots'
 )
 
-SHOW_HISTORY_ICON=true
-RECENT_ICON="document-open-recent-symbolic"
 REFRESH_ICON="view-refresh"
 
 mkdir -p "$FD_CACHE_DIR"
@@ -375,33 +373,42 @@ update_history() {
     local file="$1"
     local now=$(date +%s)
     local tmp_file=$(mktemp)
-    local found=0
+
+    declare -A counts
+    declare -A last_times
 
     if [[ -s "$HISTORY_FILE" ]]; then
         while IFS='|' read -r path count last_time; do
             [[ -z "$path" ]] && continue
-            if [[ "$path" == "$file" ]]; then
-                count=$((count + 1))
-                last_time=$now
-                found=1
+
+            if [[ -n "${counts[$path]:-}" ]]; then
+                counts[$path]=$(( counts[$path] + count ))
+                if (( last_time > ${last_times[$path]} )); then
+                    last_times[$path]=$last_time
+                fi
+            else
+                counts[$path]=$count
+                last_times[$path]=$last_time
             fi
+        done < "$HISTORY_FILE"
+    fi
 
-            local age=$(( (now - last_time) / 86400 + 1 ))
-            (( age < 1 )) && age=1
-            local score=$(( (count * 1000000) / age ))
-            printf '%012d|%s|%d|%d\n' "$score" "$path" "$count" "$last_time"
-        done < "$HISTORY_FILE" | sort -t'|' -k1,1nr | head -n "$HISTORY_LIMIT" | cut -d'|' -f2- > "$tmp_file"
+    if [[ -n "${counts[$file]:-}" ]]; then
+        counts[$file]=$(( counts[$file] + 1 ))
+        last_times[$file]=$now
     else
-        : > "$tmp_file"
+        counts[$file]=1
+        last_times[$file]=$now
     fi
 
-    if (( !found )); then
-        {
-            printf '%s|1|%d\n' "$file" "$now"
-            cat "$tmp_file"
-        } | head -n "$HISTORY_LIMIT" > "${tmp_file}.new"
-        mv "${tmp_file}.new" "$tmp_file"
-    fi
+    for path in "${!counts[@]}"; do
+        local count=${counts[$path]}
+        local last_time=${last_times[$path]}
+        local age=$(( (now - last_time) / 86400 + 1 ))
+        (( age < 1 )) && age=1
+        local score=$(( (count * 1000000) / age ))
+        printf '%012d|%s|%d|%d\n' "$score" "$path" "$count" "$last_time"
+    done | sort -t'|' -k1,1nr | head -n "$HISTORY_LIMIT" | cut -d'|' -f2- > "$tmp_file"
 
     mv "$tmp_file" "$HISTORY_FILE"
 }
@@ -410,25 +417,156 @@ get_history_files() {
     local now=$(date +%s)
     [[ ! -s "$HISTORY_FILE" ]] && return
 
-    while IFS='|' read -r _ path; do
-        [[ -z "$path" ]] && continue
-        if [[ -f "$path" ]]; then
-            local display_path="${path/#$HOME/\~}"
-            if [[ "$SHOW_HISTORY_ICON" == true ]]; then
-                printf '%s\x00icon\x1f%s\n' "$display_path" "$RECENT_ICON"
-            else
-                printf '%s\n' "$display_path"
-            fi
-        fi
-    done < <(
-        while IFS='|' read -r path count last_time; do
-            [[ -z "$path" ]] && continue
-            local age=$(( (now - last_time) / 86400 + 1 ))
-            (( age < 1 )) && age=1
-            local score=$(( (count * 1000000) / age ))
-            printf '%012d|%s\n' "$score" "$path"
-        done < "$HISTORY_FILE" | sort -t'|' -k1,1nr
-    )
+    local max_display=${ROFI_FD_DISPLAY_WIDTH:-80}
+
+    awk -v now="$now" -v max_display="$max_display" -v home="$HOME" -v limit="$HISTORY_LIMIT" '
+        function shorten_middle(text, max_len,   keep, front, back) {
+            if (max_len <= 0 || length(text) <= max_len) return text;
+            keep = max_len - 3;
+            if (keep < 1) keep = 1;
+            front = int((keep + 1) / 2);
+            back = keep - front;
+            if (back < 1) back = 1;
+            return substr(text, 1, front) "..." substr(text, length(text) - back + 1);
+        }
+
+        function format_display(path,   base, dir, sep, available, dir_display) {
+            sep = " — ";
+            base = path;
+            sub(/^.*\//, "", base);
+
+            dir = path;
+            sub(/\/[^/]*$/, "", dir);
+            if (dir == path) dir = "";
+            if (dir != "" && home != "" && index(dir, home) == 1) {
+                dir = "~" substr(dir, length(home) + 1);
+            }
+
+            if (dir == "") return base;
+
+            if (max_display <= 0) max_display = 80;
+            available = max_display - length(base) - length(sep);
+
+            if (available <= 0) return base;
+
+            dir_display = dir;
+            if (length(dir_display) > available) {
+                dir_display = shorten_middle(dir_display, available);
+            }
+
+            return base sep dir_display;
+        }
+
+        BEGIN { FS = "|"; }
+
+        {
+            path = $1; count = $2; last_time = $3;
+            if (path == "") next;
+
+            if (system("[ -f \"" path "\" ]") != 0) next;
+
+            age = int((now - last_time) / 86400 + 1);
+            if (age < 1) age = 1;
+            score = int((count * 1000000) / age);
+
+            printf "%012d|%s\n", score, path;
+        }
+    ' "$HISTORY_FILE" | sort -t'|' -k1,1nr | head -n "$HISTORY_LIMIT" | awk -F'|' -v max_display="$max_display" -v home="$HOME" '
+        function shorten_middle(text, max_len,   keep, front, back) {
+            if (max_len <= 0 || length(text) <= max_len) return text;
+            keep = max_len - 3;
+            if (keep < 1) keep = 1;
+            front = int((keep + 1) / 2);
+            back = keep - front;
+            if (back < 1) back = 1;
+            return substr(text, 1, front) "..." substr(text, length(text) - back + 1);
+        }
+
+        function format_display(path,   base, dir, sep, available, dir_display) {
+            sep = " — ";
+            base = path;
+            sub(/^.*\//, "", base);
+
+            dir = path;
+            sub(/\/[^/]*$/, "", dir);
+            if (dir == path) dir = "";
+            if (dir != "" && home != "" && index(dir, home) == 1) {
+                dir = "~" substr(dir, length(home) + 1);
+            }
+
+            if (dir == "") return base;
+
+            if (max_display <= 0) max_display = 80;
+            available = max_display - length(base) - length(sep);
+
+            if (available <= 0) return base;
+
+            dir_display = dir;
+            if (length(dir_display) > available) {
+                dir_display = shorten_middle(dir_display, available);
+            }
+
+            return base sep dir_display;
+        }
+
+        {
+            path = $2;
+            display = format_display(path);
+            printf "%s\x00display\x1f%s\n", path, display;
+        }
+    '
+}
+
+get_cache_entries() {
+    [[ ! -s "$FD_CACHE_FILE" ]] && return
+
+    local max_display=${ROFI_FD_DISPLAY_WIDTH:-80}
+
+    awk -v max_display="$max_display" -v home="$HOME" '
+        function shorten_middle(text, max_len,   keep, front, back) {
+            if (max_len <= 0 || length(text) <= max_len) return text;
+            keep = max_len - 3;
+            if (keep < 1) keep = 1;
+            front = int((keep + 1) / 2);
+            back = keep - front;
+            if (back < 1) back = 1;
+            return substr(text, 1, front) "..." substr(text, length(text) - back + 1);
+        }
+
+        function format_display(path,   base, dir, sep, available, dir_display) {
+            sep = " — ";
+            base = path;
+            sub(/^.*\//, "", base);
+
+            dir = path;
+            sub(/\/[^/]*$/, "", dir);
+            if (dir == path) dir = "";
+            if (dir != "" && home != "" && index(dir, home) == 1) {
+                dir = "~" substr(dir, length(home) + 1);
+            }
+
+            if (dir == "") return base;
+
+            if (max_display <= 0) max_display = 80;
+            available = max_display - length(base) - length(sep);
+
+            if (available <= 0) return base;
+
+            dir_display = dir;
+            if (length(dir_display) > available) {
+                dir_display = shorten_middle(dir_display, available);
+            }
+
+            return base sep dir_display;
+        }
+
+        {
+            path = $0;
+            if (path == "") next;
+            display = format_display(path);
+            printf "%s\x00display\x1f%s\n", path, display;
+        }
+    ' "$FD_CACHE_FILE"
 }
 
 open_with_preferred_app() {
@@ -482,21 +620,25 @@ open_with_preferred_app() {
 }
 
 show_rofi() {
+    local rofi_args=(-dmenu -i -p "$PROMPT_LABEL" -theme "$ROFI_THEME_PATH")
+
+    if [[ "${ROFI_FD_DISABLE_ELLIPSIZE:-true}" == true ]]; then
+        rofi_args+=(-theme-str 'element-text, element-text-selected, element-text-active { ellipsize: "none"; }')
+    fi
+
+    rofi_args+=(-show-icons)
+
     {
-        if [[ "$SHOW_HISTORY_ICON" == true ]]; then
-            printf 'Force Refresh Cache\x00icon\x1f%s\n' "$REFRESH_ICON"
-        else
-            printf 'Force Refresh Cache\n'
-        fi
+        printf 'Force Refresh Cache\x00icon\x1f%s\n' "$REFRESH_ICON"
 
         if [[ -s "$HISTORY_FILE" ]]; then
             get_history_files
         fi
 
         if [[ -s "$FD_CACHE_FILE" ]]; then
-            cat "$FD_CACHE_FILE"
+            get_cache_entries
         fi
-    } | rofi -dmenu -i -p "$PROMPT_LABEL" -theme "$ROFI_THEME_PATH" -show-icons
+    } | rofi "${rofi_args[@]}"
 }
 
 if [[ -z "${ROFI_RETV:-}" ]]; then
