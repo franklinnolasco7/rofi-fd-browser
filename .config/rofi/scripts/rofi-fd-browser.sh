@@ -4,7 +4,7 @@ set -uo pipefail
 
 SEARCH_ROOT="${ROFI_FD_SEARCH_ROOT:-$HOME}"
 ROFI_THEME_PATH="${ROFI_FD_BROWSER_THEME:-$HOME/.config/rofi/config.rasi}"
-PROMPT_LABEL="${ROFI_FD_BROWSER_PROMPT:- }"
+PROMPT_LABEL="${ROFI_FD_BROWSER_PROMPT:- }"
 HISTORY_FILE="${XDG_CACHE_HOME:-$HOME/.cache}/rofi-fd-browser-history"
 HISTORY_LIMIT=100
 
@@ -410,8 +410,7 @@ if [[ -z "${ROFI_RETV:-}" ]]; then
 fi
 
 choice=$(show_rofi)
-choice=${choice%%
-\n'}
+choice=${choice%%$'\n'}
 
 [[ -z "$choice" ]] && exit 0
 
