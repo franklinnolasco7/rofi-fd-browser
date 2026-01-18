@@ -4,8 +4,9 @@ A rofi file browser using fd with background caching and frecency-based history.
 
 ## Screenshots
 
-<img width="1920" height="1080" alt="image" src="https://github.com/user-attachments/assets/110e7411-e837-4605-b2d6-eb31fd9dd718" />
-<img width="1920" height="1080" alt="image" src="https://github.com/user-attachments/assets/1ed26f22-e5fb-4473-8c9e-2e5c021066c3" />
+<img width="1920" height="1080" alt="image" src="https://github.com/user-attachments/assets/8c42060d-51ed-4448-b4fe-e2e1f50ae82a" />
+<img width="1920" height="1080" alt="image" src="https://github.com/user-attachments/assets/f765a4ff-d70b-40ab-9f2a-9a68a78c21f4" />
+<img width="1920" height="1080" alt="image" src="https://github.com/user-attachments/assets/5fd83551-cf88-4c4f-a66a-cc5d85420c80" />
 
 ## Requirements
 
