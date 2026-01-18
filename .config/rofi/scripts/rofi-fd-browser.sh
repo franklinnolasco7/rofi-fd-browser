@@ -12,19 +12,6 @@ FD_CACHE_DIR="${XDG_CACHE_HOME:-$HOME/.cache}"
 FD_CACHE_FILE="${FD_CACHE_DIR}/rofi-fd-browser-cache"
 FD_CACHE_STAMP="${FD_CACHE_DIR}/rofi-fd-browser-cache.stamp"
 FD_CACHE_LOCK="${FD_CACHE_DIR}/rofi-fd-browser-cache.lock"
-FD_FULL_STAMP="${FD_CACHE_DIR}/rofi-fd-browser-cache.fullstamp"
-
-FD_CACHE_TTL="${FD_CACHE_TTL:-30}"
-FD_INCREMENTAL_TTL="${FD_INCREMENTAL_TTL:-$FD_CACHE_TTL}"
-FD_MAX_INCREMENTAL_DIRS="${FD_MAX_INCREMENTAL_DIRS:-512}"
-
-if [[ -z "${FD_FULL_REFRESH_TTL:-}" ]]; then
-    if (( FD_CACHE_TTL > 0 )); then
-        FD_FULL_REFRESH_TTL=$(( FD_CACHE_TTL * 4 ))
-    else
-        FD_FULL_REFRESH_TTL=0
-    fi
-fi
 
 NPROC_COUNT=$(nproc 2>/dev/null || echo 1)
 FD_THREADS=$(( NPROC_COUNT * 2 ))
@@ -61,7 +48,6 @@ HISTORY_ICON="document-open-recent-symbolic"
 
 mkdir -p "$FD_CACHE_DIR"
 [[ ! -f "$HISTORY_FILE" ]] && touch "$HISTORY_FILE"
-[[ ! -f "$FD_CACHE_FILE" ]] && : > "$FD_CACHE_FILE"
 
 with_cache_lock() {
     if command -v flock >/dev/null 2>&1; then
@@ -106,98 +92,12 @@ fd_search() {
     "${args[@]}"
 }
 
-collect_changed_dirs() {
-    [[ ! -f "$FD_CACHE_STAMP" ]] && return
-
-    local stamp_time=$(stat -c %Y "$FD_CACHE_STAMP" 2>/dev/null || echo 0)
-    (( stamp_time == 0 )) && return
-
-    local now=$(date +%s)
-    local window=$(( now - stamp_time ))
-    (( window < 1 )) && window=1
-
-    local excludes=()
-    get_excludes excludes
-
-    local fd_args=(
-        fd . "$SEARCH_ROOT"
-        --color never
-        --hidden
-        --type file
-        --absolute-path
-        --changed-within "${window}s"
-    )
-
-    if (( FD_THREADS > 0 )); then
-        fd_args+=(--threads "$FD_THREADS")
-    fi
-
-    local exclude
-    for exclude in "${excludes[@]}"; do
-        fd_args+=(--exclude "$exclude")
-    done
-
-    "${fd_args[@]}" 2>/dev/null | \
-        while IFS= read -r file_path; do
-            [[ -n "$file_path" ]] && printf '%s\0' "${file_path%/*}"
-        done | \
-        sort -zu | xargs -0 -n1 2>/dev/null
-}
-
-_prune_cache_entries() {
-    local dirs=()
-    local dir
-    for dir in "$@"; do
-        [[ -n "$dir" ]] && dirs+=("${dir%/}")
-    done
-
-    [[ ! -s "$FD_CACHE_FILE" ]] && return 0
-
-    local tmp_file="${FD_CACHE_FILE}.tmp"
-    local changed=0
-
-    while IFS= read -r path; do
-        [[ -z "$path" ]] && continue
-
-        local skip=false
-        if ((${#dirs[@]})); then
-            for dir in "${dirs[@]}"; do
-                if [[ "$path" == "$dir" || "$path" == "$dir"/* ]]; then
-                    skip=true
-                    changed=1
-                    break
-                fi
-            done
-        fi
-
-        if [[ "$skip" == true ]]; then
-            continue
-        fi
-
-        if [[ ! -f "$path" ]]; then
-            changed=1
-            continue
-        fi
-
-        printf '%s\n' "$path"
-    done < "$FD_CACHE_FILE" > "$tmp_file"
-
-    if (( changed )); then
-        mv "$tmp_file" "$FD_CACHE_FILE"
-        touch "$FD_CACHE_STAMP"
-    else
-        rm -f "$tmp_file"
-    fi
-
-    return $changed
-}
-
 _refresh_fd_cache_body() {
     local tmp_file="${FD_CACHE_FILE}.tmp"
 
     if fd_search "$SEARCH_ROOT" 2>/dev/null | sort -u > "$tmp_file"; then
         mv "$tmp_file" "$FD_CACHE_FILE"
-        touch "$FD_CACHE_STAMP" "$FD_FULL_STAMP"
+        touch "$FD_CACHE_STAMP"
     else
         rm -f "$tmp_file"
     fi
@@ -205,169 +105,25 @@ _refresh_fd_cache_body() {
 
 notify_cache_refresh() {
     command -v notify-send >/dev/null 2>&1 || return 0
-    local mode="${1:-full}"
     local app="${ROFI_FD_NOTIFY_APP:-Rofi FD Browser}"
     local icon="${ROFI_FD_NOTIFY_ICON:-view-refresh-symbolic}"
     local title="Cache Refresh"
-    local body
-    case "$mode" in
-        incremental)
-            body="Cache refresh <span color='#89b4fa'>[INCREMENTAL]</span>"
-            ;;
-        *)
-            body="Cache refresh <span color='#a6e3a1'>[COMPLETE]</span>"
-            ;;
-    esac
+    local body="Cache refresh <span color='#a6e3a1'>[COMPLETE]</span>"
     notify-send -a "$app" -i "$icon" "$title" "$body"
 }
 
 refresh_fd_cache() {
-    local mode="${1:-full}"
-    local notify="${2:-false}"
+    local notify="${1:-false}"
     with_cache_lock _refresh_fd_cache_body
     if [[ "$notify" == "true" ]]; then
-        notify_cache_refresh "$mode"
+        notify_cache_refresh
     fi
 }
 
-run_refresh_worker() {
-    local mode="${1:-full}"
-    local notify="${2:-false}"
-
-    case "$mode" in
-        incremental)
-            incremental_refresh_fd_cache false || refresh_fd_cache full false
-            ;;
-        *)
-            refresh_fd_cache "$mode" false
-            ;;
-    esac
-}
-
-refresh_fd_cache_async() {
-    local mode="${1:-full}"
-    local notify="${2:-false}"
-    (
-        if command -v nice >/dev/null 2>&1; then
-            nice -n 10 run_refresh_worker "$mode" "$notify"
-        else
-            run_refresh_worker "$mode" "$notify"
-        fi
-    ) >/dev/null 2>&1 &
-}
-
-_update_cache_for_dirs() {
-    local dirs=()
-    local dir
-    for dir in "$@"; do
-        [[ -d "$dir" ]] || continue
-        dirs+=("${dir%/}")
-    done
-
-    [[ ${#dirs[@]} -eq 0 ]] && return
-
-    _prune_cache_entries "${dirs[@]}"
-
-    local tmp_new="${FD_CACHE_FILE}.new"
-    if ! fd_search "${dirs[@]}" 2>/dev/null | sort -u > "$tmp_new"; then
-        rm -f "$tmp_new"
-        return
+initialize_cache_if_needed() {
+    if [[ ! -f "$FD_CACHE_FILE" ]] || [[ ! -s "$FD_CACHE_FILE" ]]; then
+        refresh_fd_cache false
     fi
-
-    if [[ ! -s "$tmp_new" ]]; then
-        rm -f "$tmp_new"
-        return
-    fi
-
-    local tmp_merged="${FD_CACHE_FILE}.merged"
-    if [[ -s "$FD_CACHE_FILE" ]]; then
-        cat "$FD_CACHE_FILE" "$tmp_new" | sort -u > "$tmp_merged" && mv "$tmp_merged" "$FD_CACHE_FILE"
-        rm -f "$tmp_merged"
-    else
-        mv "$tmp_new" "$FD_CACHE_FILE"
-    fi
-
-    rm -f "$tmp_new"
-    touch "$FD_CACHE_STAMP"
-}
-
-incremental_refresh_fd_cache() {
-    local notify="${1:-false}"
-
-    if [[ ! -s "$FD_CACHE_FILE" || ! -f "$FD_CACHE_STAMP" ]]; then
-        refresh_fd_cache full false
-        return
-    fi
-
-    local dirs=()
-    local overflow=false
-    while IFS= read -r dir; do
-        [[ -z "$dir" ]] && continue
-        dirs+=("$dir")
-        if (( ${#dirs[@]} >= FD_MAX_INCREMENTAL_DIRS )); then
-            overflow=true
-            break
-        fi
-    done < <(collect_changed_dirs)
-
-    if [[ "$overflow" == true ]]; then
-        refresh_fd_cache full false
-        return
-    fi
-
-    if (( ${#dirs[@]} == 0 )); then
-        with_cache_lock _prune_cache_entries >/dev/null 2>&1
-        return
-    fi
-
-    with_cache_lock _update_cache_for_dirs "${dirs[@]}"
-}
-
-cache_age_seconds() {
-    local target="$1"
-    [[ ! -f "$target" ]] && { printf '%d\n' -1; return; }
-
-    local mtime=$(stat -c %Y "$target" 2>/dev/null || echo 0)
-    (( mtime == 0 )) && { printf '%d\n' 0; return; }
-
-    printf '%d\n' $(( $(date +%s) - mtime ))
-}
-
-maybe_refresh_fd_cache() {
-    local force_refresh=${1:-false}
-
-    if [[ "$force_refresh" == true || ! -s "$FD_CACHE_FILE" ]]; then
-        refresh_fd_cache_async full false
-        return 0
-    fi
-
-    local age
-    age=$(cache_age_seconds "$FD_CACHE_FILE")
-
-    if (( age < 0 )); then
-        refresh_fd_cache_async full false
-        return 0
-    fi
-
-    if (( FD_FULL_REFRESH_TTL > 0 )); then
-        local full_age
-        full_age=$(cache_age_seconds "$FD_FULL_STAMP")
-        if (( full_age < 0 || full_age >= FD_FULL_REFRESH_TTL )); then
-            refresh_fd_cache_async full false
-            return 0
-        fi
-    fi
-
-    if (( FD_INCREMENTAL_TTL <= 0 )); then
-        refresh_fd_cache_async incremental false
-        return 0
-    fi
-
-    if (( age >= FD_INCREMENTAL_TTL )); then
-        refresh_fd_cache_async incremental false
-    fi
-
-    return 0
 }
 
 update_history() {
@@ -642,35 +398,25 @@ show_rofi() {
     } | rofi "${rofi_args[@]}"
 }
 
+initialize_cache_if_needed
+
 if [[ -z "${ROFI_RETV:-}" ]]; then
     case "${1:-}" in
         --refresh)
-            refresh_fd_cache full true
+            refresh_fd_cache true
             exit $?
-            ;;
-        --incremental)
-            incremental_refresh_fd_cache true
-            exit $?
-            ;;
-        --background-refresh)
-            refresh_fd_cache_async full false
-            exit 0
-            ;;
-        --background-incremental)
-            refresh_fd_cache_async incremental false
-            exit 0
             ;;
     esac
 fi
 
-maybe_refresh_fd_cache
 choice=$(show_rofi)
-choice=${choice%%$'\n'}
+choice=${choice%%
+\n'}
 
 [[ -z "$choice" ]] && exit 0
 
 if [[ "$choice" == "Force Refresh Cache" ]]; then
-    refresh_fd_cache full true
+    refresh_fd_cache true
     exec "$0"
 fi
 

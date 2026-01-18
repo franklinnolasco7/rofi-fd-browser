@@ -1,0 +1,24 @@
+[Unit]
+Description=Rofi FD Browser Cache Daemon
+Documentation=https://github.com/franklinnolasco7/rofi-fd-browser
+After=graphical-session.target
+
+[Service]
+Type=simple
+ExecStart=%h/.config/rofi/scripts/rofi-fd-daemon.sh start
+ExecStop=%h/.config/rofi/scripts/rofi-fd-daemon.sh stop
+Restart=on-failure
+RestartSec=10
+StandardOutput=null
+StandardError=journal
+
+Environment="ROFI_FD_SEARCH_ROOT=%h"
+Environment="XDG_CACHE_HOME=%h/.cache"
+Environment="ROFI_FD_FULL_REBUILD_INTERVAL=3600"
+
+Nice=10
+IOSchedulingClass=idle
+CPUQuota=50%
+
+[Install]
+WantedBy=default.target
