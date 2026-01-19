@@ -334,36 +334,13 @@ open_with_preferred_app() {
         return 1
     fi
 
-    local mimetype=""
-    if command -v file >/dev/null 2>&1; then
-        mimetype=$(file --mime-type -b "$file" 2>/dev/null)
-    fi
-
-    if [[ -n "$mimetype" ]] && command -v xdg-mime >/dev/null 2>&1; then
-        local desktop_id=$(xdg-mime query default "$mimetype" 2>/dev/null)
-
-        if [[ -n "$desktop_id" ]]; then
-            local desktop_name="${desktop_id%.desktop}"
-
-            if command -v gtk-launch >/dev/null 2>&1; then
-                gtk-launch "$desktop_name" "$file" >/dev/null 2>&1 &
-                return 0
-            fi
-
-            if command -v gio >/dev/null 2>&1; then
-                GIO_LAUNCHED_DESKTOP_FILE="$desktop_id" gio open "$file" >/dev/null 2>&1 &
-                return 0
-            fi
-        fi
-    fi
-
-    if command -v gio >/dev/null 2>&1; then
-        gio open "$file" >/dev/null 2>&1 &
+    if command -v xdg-open >/dev/null 2>&1; then
+        setsid -f xdg-open "$file" >/dev/null 2>&1
         return 0
     fi
 
-    if command -v xdg-open >/dev/null 2>&1; then
-        xdg-open "$file" >/dev/null 2>&1 &
+    if command -v gio >/dev/null 2>&1; then
+        setsid -f gio open "$file" >/dev/null 2>&1
         return 0
     fi
 
