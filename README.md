@@ -4,9 +4,9 @@ A rofi file browser using fd with real-time inotify caching and frecency-based h
 
 ## Screenshots
 
-<img width="1920" height="1080" alt="image" src="https://github.com/user-attachments/assets/8c42060d-51ed-4448-b4fe-e2e1f50ae82a" />
-<img width="1920" height="1080" alt="image" src="https://github.com/user-attachments/assets/f765a4ff-d70b-40ab-9f2a-9a68a78c21f4" />
-<img width="1920" height="1080" alt="image" src="https://github.com/user-attachments/assets/5fd83551-cf88-4c4f-a66a-cc5d85420c80" />
+<img width="1920" height="1080" alt="image" src="https://github.com/user-attachments/assets/f987ed49-447b-4534-b160-9dc314425062" />
+<img width="1920" height="1080" alt="image" src="https://github.com/user-attachments/assets/b5e6e99c-d82f-4e73-9724-010a0cdab5bf" />
+<img width="1920" height="1080" alt="image" src="https://github.com/user-attachments/assets/2b73e730-6432-4ee6-9847-4d222baf0291" />
 
 ## Requirements
 
@@ -65,6 +65,9 @@ export ROFI_FD_DISPLAY_WIDTH=80
 
 # Full rebuild interval in seconds (default: 3600)
 export ROFI_FD_FULL_REBUILD_INTERVAL=3600
+
+# Show refresh button (default: false)
+export ROFI_FD_SHOW_REFRESH_BUTTON=false
 ```
 
 ## How it works

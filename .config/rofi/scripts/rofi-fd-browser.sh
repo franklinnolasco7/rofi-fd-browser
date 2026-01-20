@@ -16,6 +16,8 @@ FD_CACHE_LOCK="${FD_CACHE_DIR}/rofi-fd-browser-cache.lock"
 NPROC_COUNT=$(nproc 2>/dev/null || echo 1)
 FD_THREADS=$(( NPROC_COUNT * 2 ))
 
+SHOW_REFRESH_BUTTON="${ROFI_FD_SHOW_REFRESH_BUTTON:-false}"
+
 FD_EXCLUDES_HOME=(
     '.git'
     'node_modules'
@@ -363,7 +365,9 @@ show_rofi() {
     rofi_args+=(-show-icons)
 
     {
-        printf 'Force Refresh Cache\x00icon\x1f%s\n' "$REFRESH_ICON"
+        if [[ "$SHOW_REFRESH_BUTTON" == "true" ]]; then
+            printf 'Force Refresh Cache\x00icon\x1f%s\n' "$REFRESH_ICON"
+        fi
 
         if [[ -s "$HISTORY_FILE" ]]; then
             get_history_files
